@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS transactional_outbox (
     status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     retry_count INT NOT NULL DEFAULT 0,
     max_retries INT NOT NULL DEFAULT 3,
+    processing_started_at TIMESTAMP WITH TIME ZONE,
     next_retry_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -39,8 +40,11 @@ CREATE TABLE IF NOT EXISTS dlq_events (
     failure_reason TEXT NOT NULL,
     payload JSONB NOT NULL,
     replayed BOOLEAN NOT NULL DEFAULT FALSE,
+    replay_count INT NOT NULL DEFAULT 0,
     escalated_to_human BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_outbox_polling ON transactional_outbox (status, next_retry_at) WHERE status IN ('PENDING', 'FAILED');
+CREATE INDEX IF NOT EXISTS idx_outbox_polling ON transactional_outbox (status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_stale_processing ON transactional_outbox (status, processing_started_at) WHERE status = 'PROCESSING';

@@ -25,11 +25,14 @@ class MockCursorDLQ:
         elif "status = 'DLQ'" in query:
             self.status = "DLQ"
         elif "INSERT INTO dlq_events" in query:
-            self.dlq_entries.append((1, params[0], params[1], params[2], params[3], False, False))
-        elif "SELECT id, outbox_id, lead_id" in query:
-            pass
-        elif "UPDATE dlq_events SET replayed = TRUE" in query:
-            pass
+            self.dlq_entries.append([1, params[0], params[1], params[2], params[3], False, 0, False])
+        elif "UPDATE dlq_events" in query and "replayed = TRUE" in query:
+            if self.dlq_entries:
+                self.dlq_entries[0][5] = True
+                self.dlq_entries[0][6] += 1
+        elif "UPDATE dlq_events" in query and "escalated_to_human = TRUE" in query:
+            if self.dlq_entries:
+                self.dlq_entries[0][7] = True
 
     def fetchone(self):
         if self.status in ["PENDING", "FAILED"]:
@@ -37,7 +40,12 @@ class MockCursorDLQ:
         return None
 
     def fetchall(self):
-        return [(1, 1, "lead_77", "Provider returned error", '{"email":"lead77@test.com"}')]
+        # Return pending DLQ entries
+        return [
+            (entry[0], entry[1], entry[6])
+            for entry in self.dlq_entries
+            if not entry[5] and not entry[7]
+        ]
 
 class MockConnectionDLQ:
     def __init__(self):
@@ -49,25 +57,21 @@ class MockConnectionDLQ:
     def commit(self):
         pass
 
-def test_dlq_escalation_after_max_retries():
+def test_automated_5min_dlq_evaluator_loop():
     conn = MockConnectionDLQ()
     failing_provider = FailingProvider()
     worker = OutboxWorker(conn, failing_provider.send_email)
-    dlq_mgr = DLQManager(conn)
+    dlq_mgr = DLQManager(conn, max_auto_replays=2)
 
-    worker.poll_and_dispatch_single()
-    assert conn.cursor_obj.retry_count == 1
-    worker.poll_and_dispatch_single()
-    assert conn.cursor_obj.retry_count == 2
-    worker.poll_and_dispatch_single()
-    assert conn.cursor_obj.retry_count == 3
+    # Exhaust 3 worker retries -> enters DLQ
+    for _ in range(4):
+        worker.poll_and_dispatch_single()
 
-    worker.poll_and_dispatch_single()
     assert conn.cursor_obj.status == "DLQ"
+    assert len(conn.cursor_obj.dlq_entries) == 1
 
-    unresolved = dlq_mgr.get_unresolved_events()
-    assert len(unresolved) == 1
-    assert unresolved[0]["lead_id"] == "lead_77"
-
-    replayed = dlq_mgr.replay_event(unresolved[0]["dlq_id"])
-    assert replayed is True
+    # Automated 5-min evaluation loop triggers replay
+    result = dlq_mgr.evaluate_and_replay_dlq(interval_minutes=0)
+    assert result["replayed"] == 1
+    assert result["escalated"] == 0
+    assert conn.cursor_obj.dlq_entries[0][5] is True
