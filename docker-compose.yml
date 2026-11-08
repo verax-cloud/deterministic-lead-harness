@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: lead_harness_postgres
+    environment:
+      POSTGRES_USER: lead_user
+      POSTGRES_PASSWORD: lead_password
+      POSTGRES_DB: lead_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lead_user -d lead_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
